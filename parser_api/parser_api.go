@@ -21,6 +21,10 @@ type Vacancy struct {
 	Details  string
 }
 
+func (v Vacancy) String() string {
+	return fmt.Sprintf("Position: %s\n Company: %s\n City: %s\n Description: %s\n Link: %s\n", v.Position, v.Company, v.City, v.Details, v.Link)
+}
+
 // PrepareDB and return it
 func PrepareDB() *sql.DB {
 	database, err := sql.Open("sqlite3", "vacancies.sqlite")
@@ -86,22 +90,15 @@ func ExistsVacancy(db *sql.DB, job Vacancy) bool {
 		return true
 	}
 	return false
-
-	// var result []Vacancy
-	// for rows.Next() {
-	// 	item := Vacancy{}
-	// 	err2 := rows.Scan(&item.Id, &item.Name, &item.Phone)
-	// 	if err2 != nil {
-	// 		panic(err2)
-	// 	}
-	// 	result = append(result, item)
-	// }
 }
 
 // ExampleScrape scrapes given URL
-func ExampleScrape() {
+func ExampleScrape() []Vacancy {
 	// Request the HTML page.
-	url := "https://api.hh.ru/vacancies?text=java&area=2"
+
+	jobs := []Vacancy{}
+
+	url := "https://api.hh.ru/vacancies?text=Go&area=2&per_page=100&experience=noExperience"
 
 	apiGet := http.Client{
 		Timeout: time.Second * 2, // Maximum of 2 secs
@@ -130,67 +127,58 @@ func ExampleScrape() {
 		panic("Couldn't read in json")
 	}
 
-	pages := data["pages"]
-	fmt.Println(pages)
-
 	items := data["items"].([]interface{})
 
 	for _, item := range items {
-		// var info map[string]interface{}
+		job := Vacancy{}
 		info := item.(map[string]interface{})
 
-		name := info["name"]
-		fmt.Println(name)
+		name := info["name"].(string)
+		job.Position = name
+		// fmt.Println(name)
 
 		area := info["area"].(map[string]interface{})
-		city := area["name"]
-		fmt.Println(city)
+		city := area["name"].(string)
+		job.City = city
+		// fmt.Println(city)
 
-		link := info["apply_alternate_url"]
-		fmt.Println(link)
+		link := info["apply_alternate_url"].(string)
+		job.Link = link
+		// fmt.Println(link)
 
 		employer := info["employer"].(map[string]interface{})
-		company := employer["name"]
-		fmt.Println(company)
+		company := employer["name"].(string)
+		job.Company = company
+		// fmt.Println(company)
+		// fmt.Println(job)
 
+		jobs = append(jobs, job)
 	}
 
-	// var child map[string]interface{}
-	// child = items.(map[string]interface{})
-	// fmt.Println(items)
-	// for _, job := range data {
-	// 	job := data.(string)
-	// }
-
-	// fmt.Println(data, errParse)
+	return jobs
 
 }
 
 func main() {
-	// db := PrepareDB()
-	// CreateTable(db)
+	start := time.Now()
+	db := PrepareDB()
+	CreateTable(db)
 
-	ExampleScrape()
+	allJobs := ExampleScrape()
 
-	// allJobs := ExampleScrape()
-	// link := `https://hh.ru/search/vacancy?text=%28junior+OR+trainee+OR+intern%29+and+%28" +
-	// 		"Go+OR+Golang+OR+Python%29&only_with_salary=false&order_by=publication_time&specialization=1" +
-	// 		"&area=113&enable_snippets=true&clusters=true&experience=noExperience&salary=`
+	for _, job := range allJobs {
+		if ExistsVacancy(db, job) {
+			continue
+		} else {
+			fmt.Println("Found new job posting!")
+			fmt.Println(job)
 
-	// for _, job := range allJobs {
-	// 	if ExistsVacancy(db, job) {
-	// 		continue
-	// 	} else {
-	// 		fmt.Println("Found new job posting!")
-	// 		new := fmt.Sprintf("%s\n %s\n %s\n %s\n", job.Position, job.Company, job.City, job.Link)
-	// 		fmt.Println(new)
+			InsertVacancy(db, job)
+		}
 
-	// 		InsertVacancy(db, job)
-	// 	}
+	}
 
-	// }
-	// fmt.Println(isExists)
+	elapsed := time.Since(start)
+	fmt.Printf("Search took %s", elapsed)
 
-	// fmt.Println(allJobs)
-	fmt.Println("Finished")
 }
