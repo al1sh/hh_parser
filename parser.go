@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -50,9 +51,9 @@ func CreateTable(db *sql.DB) {
 }
 
 // InsertVacancy stores found vacancis in the db
-func InsertVacancy(db *sql.DB, jobs []Vacancy) {
+func InsertVacancy(db *sql.DB, job Vacancy) {
 	sqlAdd := `
-	INSERT OR REPLACE INTO vacancies(Position, Company, Link, City, Details) VALUES (?, ?, ?, ?, ?);
+	INSERT INTO vacancies(Position, Company, Link, City, Details) VALUES (?, ?, ?, ?, ?);
 	`
 
 	stmt, err := db.Prepare(sqlAdd)
@@ -61,13 +62,12 @@ func InsertVacancy(db *sql.DB, jobs []Vacancy) {
 	}
 	defer stmt.Close()
 
-	for _, job := range jobs {
-		fmt.Println(job.Position)
-		_, err2 := stmt.Exec(job.Position, job.Company, job.Link, job.City, job.Details)
-		if err2 != nil {
-			panic(err2)
-		}
+	fmt.Println("Inserting " + job.Position)
+	_, err2 := stmt.Exec(job.Position, job.Company, job.Link, job.City, job.Details)
+	if err2 != nil {
+		panic(err2)
 	}
+
 }
 
 // ExistsVacancy checks if given job exists in the database
@@ -75,19 +75,14 @@ func ExistsVacancy(db *sql.DB, job Vacancy) bool {
 	sqlRead := fmt.Sprintf(`SELECT ID FROM vacancies WHERE Position="%s" AND Company="%s" AND City="%s";`,
 		job.Position, job.Company, job.City)
 
-	fmt.Println(sqlRead)
+	// fmt.Println(sqlRead)
 	rows, err := db.Query(sqlRead)
 	if err != nil {
 		panic(err)
 	}
 	defer rows.Close()
 
-	// var id int
 	if rows.Next() {
-		// rows.Scan(&id)
-		// if id != 0 {
-		// 	fmt.Println(id)
-		// }
 		return true
 	}
 	return false
@@ -108,7 +103,7 @@ func ExampleScrape() []Vacancy {
 	// Request the HTML page.
 	res, err := http.Get("https://hh.ru/search/vacancy?text=%28junior+OR+trainee+OR+intern%29+and+%28" +
 		"Go+OR+Golang+OR+Python%29&only_with_salary=false&order_by=publication_time&specialization=1" +
-		"&area=113&enable_snippets=true&clusters=true&experience=noExperience&salary=")
+		"&area=1&enable_snippets=true&clusters=true&experience=noExperience&salary=")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -124,6 +119,35 @@ func ExampleScrape() []Vacancy {
 	}
 
 	jobs := []Vacancy{}
+
+	// buttons := doc.Find("a.bloko-button")
+
+	buttons := doc.Find("a.bloko-button").FilterFunction(func(i int, s *goquery.Selection) bool {
+		_, exists := s.Attr("data-page")
+		fmt.Println(exists)
+		return exists
+	})
+	// numberButtons := buttons.Size()
+	lastPage := buttons.Last().Text()
+
+	_, err2 := strconv.ParseInt(lastPage, 10, 0)
+	if err2 != nil {
+		fmt.Println("Button wasnt numeric ", lastPage)
+
+		lastPage = buttons.Eq(-2).Text()
+		fmt.Println("Last button now ", lastPage)
+		_, err3 := strconv.ParseInt(lastPage, 10, 0)
+		if err3 != nil {
+			fmt.Println(lastPage)
+			panic("Unknown number of pages")
+		}
+	}
+
+	buttons.Each(func(i int, s *goquery.Selection) {
+		fmt.Println(s.Text())
+	})
+
+	// fmt.Println(lastPage)
 
 	// Find the review items
 	doc.Find(".vacancy-serp-item").Each(func(i int, s *goquery.Selection) {
@@ -164,10 +188,25 @@ func ExampleScrape() []Vacancy {
 func main() {
 	db := PrepareDB()
 	CreateTable(db)
+
 	allJobs := ExampleScrape()
-	InsertVacancy(db, allJobs)
-	isExists := ExistsVacancy(db, allJobs[0])
-	fmt.Println(isExists)
+	// link := `https://hh.ru/search/vacancy?text=%28junior+OR+trainee+OR+intern%29+and+%28" +
+	// 		"Go+OR+Golang+OR+Python%29&only_with_salary=false&order_by=publication_time&specialization=1" +
+	// 		"&area=113&enable_snippets=true&clusters=true&experience=noExperience&salary=`
+
+	for _, job := range allJobs {
+		if ExistsVacancy(db, job) {
+			continue
+		} else {
+			fmt.Println("Found new job posting!")
+			new := fmt.Sprintf("%s\n %s\n %s\n %s\n", job.Position, job.Company, job.City, job.Link)
+			fmt.Println(new)
+
+			InsertVacancy(db, job)
+		}
+
+	}
+	// fmt.Println(isExists)
 
 	// fmt.Println(allJobs)
 	fmt.Println("Finished")
