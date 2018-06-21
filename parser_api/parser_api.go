@@ -76,12 +76,14 @@ func InsertVacancy(db *sql.DB, job Vacancy) {
 
 // ExistsVacancy checks if given job exists in the database
 func ExistsVacancy(db *sql.DB, job Vacancy) bool {
-	sqlRead := fmt.Sprintf(`SELECT ID FROM vacancies WHERE Position="%s" AND Company="%s" AND City="%s";`,
-		job.Position, job.Company, job.City)
-
+	sqlRead, errPrep := db.Prepare(`SELECT ID FROM vacancies WHERE Position=? AND Company=? AND City=?`)
+	if errPrep != nil {
+		panic(errPrep)
+	}
 	// fmt.Println(sqlRead)
-	rows, err := db.Query(sqlRead)
+	rows, err := sqlRead.Query(job.Position, job.Company, job.City)
 	if err != nil {
+		fmt.Println(err)
 		panic(err)
 	}
 	defer rows.Close()
@@ -93,12 +95,10 @@ func ExistsVacancy(db *sql.DB, job Vacancy) bool {
 }
 
 // ExampleScrape scrapes given URL
-func ExampleScrape() []Vacancy {
+func ExampleScrape(url string) []Vacancy {
 	// Request the HTML page.
 
 	jobs := []Vacancy{}
-
-	url := "https://api.hh.ru/vacancies?text=Go&area=2&per_page=100&experience=noExperience"
 
 	apiGet := http.Client{
 		Timeout: time.Second * 2, // Maximum of 2 secs
@@ -142,7 +142,7 @@ func ExampleScrape() []Vacancy {
 		job.City = city
 		// fmt.Println(city)
 
-		link := info["apply_alternate_url"].(string)
+		link := info["alternate_url"].(string)
 		job.Link = link
 		// fmt.Println(link)
 
@@ -164,16 +164,31 @@ func main() {
 	db := PrepareDB()
 	CreateTable(db)
 
-	allJobs := ExampleScrape()
+	jobs := []string{"python", "Go+OR+Golang", "Project+manager+AND+English"}
+	experiences := []string{"noExperience", "between1And3"}
+	cities := []string{"1", "2", "1624"}
+	allJobs := []Vacancy{}
 
-	for _, job := range allJobs {
-		if ExistsVacancy(db, job) {
+	for _, job := range jobs {
+		for _, experience := range experiences {
+			for _, city := range cities {
+				url := "https://api.hh.ru/vacancies?text=" + job + "&area=" + city + "&experience=" + experience + "&per_page=100&specialization=1"
+				allJobs = append(ExampleScrape(url), allJobs...)
+			}
+		}
+	}
+
+	// allJobs := ExampleScrape()
+
+	for _, position := range allJobs {
+		fmt.Println(position)
+		if ExistsVacancy(db, position) {
 			continue
 		} else {
 			fmt.Println("Found new job posting!")
-			fmt.Println(job)
+			fmt.Println(position)
 
-			InsertVacancy(db, job)
+			InsertVacancy(db, position)
 		}
 
 	}
