@@ -95,13 +95,13 @@ func ExistsVacancy(db *sql.DB, job Vacancy) bool {
 }
 
 // ExampleScrape scrapes given URL
-func ExampleScrape(url string, ch chan []Vacancy) {
+func ExampleScrape(url string) []Vacancy {
 	// Request the HTML page.
 
 	jobs := []Vacancy{}
 
 	apiGet := http.Client{
-		Timeout: time.Second * 6, // Maximum of 6 secs
+		Timeout: time.Second * 2, // Maximum of 2 secs
 	}
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -155,7 +155,7 @@ func ExampleScrape(url string, ch chan []Vacancy) {
 		jobs = append(jobs, job)
 	}
 
-	ch <- jobs
+	return jobs
 
 }
 
@@ -169,23 +169,15 @@ func main() {
 	cities := []string{"1", "2", "1624"}
 	allJobs := []Vacancy{}
 
-	ch := make(chan []Vacancy)
-
 	for _, job := range jobs {
 		for _, experience := range experiences {
 			for _, city := range cities {
 				url := "https://api.hh.ru/vacancies?text=" + job + "&area=" + city + "&experience=" + experience + "&per_page=100&specialization=1"
-				go ExampleScrape(url, ch)
+				allJobs = append(ExampleScrape(url), allJobs...)
 			}
 		}
 	}
-	for i := 0; i < 18; i++ {
-		// fmt.Println("appending now")
-		allJobs = append(allJobs, <-ch...)
-		// fmt.Println(len(allJobs))
-	}
 
-	fmt.Println("moving on")
 	// allJobs := ExampleScrape()
 
 	for _, position := range allJobs {
