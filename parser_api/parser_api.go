@@ -66,7 +66,6 @@ func InsertVacancy(db *sql.DB, job Vacancy) {
 	}
 	defer stmt.Close()
 
-	fmt.Println("Inserting " + job.Position)
 	_, err2 := stmt.Exec(job.Position, job.Company, job.Link, job.City, job.Details)
 	if err2 != nil {
 		panic(err2)
@@ -164,26 +163,30 @@ func main() {
 	db := PrepareDB()
 	CreateTable(db)
 
-	jobs := []string{"python", "Go+OR+Golang", "Project+manager+AND+English"}
-	experiences := []string{"noExperience", "between1And3"}
 	cities := []string{"1", "2", "1624"}
+	jobs := []string{"python+junior", "go+OR+golang", "Project+manager+AND+English"}
+	experiences := []string{"noExperience", "between1And3"}
 	allJobs := []Vacancy{}
 
 	ch := make(chan []Vacancy)
+	routines := 0
 
 	for _, job := range jobs {
 		for _, experience := range experiences {
 			for _, city := range cities {
 				url := "https://api.hh.ru/vacancies?text=" + job + "&area=" + city + "&experience=" + experience + "&per_page=100&specialization=1"
+				// fmt.Println(url)
 				go ExampleScrape(url, ch)
+				routines++
 			}
 		}
 	}
-	for i := 0; i < 18; i++ {
+	for i := 0; i < routines; i++ {
 		// fmt.Println("appending now")
 		allJobs = append(allJobs, <-ch...)
 		// fmt.Println(len(allJobs))
 	}
+	close(ch)
 
 	fmt.Println("moving on")
 	// allJobs := ExampleScrape()
@@ -193,7 +196,7 @@ func main() {
 		if ExistsVacancy(db, position) {
 			continue
 		} else {
-			fmt.Println("Found new job posting!")
+			fmt.Println("******\nFound new job posting!\n******")
 			fmt.Println(position)
 
 			InsertVacancy(db, position)
