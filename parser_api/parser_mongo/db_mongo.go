@@ -8,17 +8,26 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/mongodb/mongo-go-driver/bson"
 	"github.com/mongodb/mongo-go-driver/mongo"
 )
 
+// db constants
 const (
 	DBName   = "Drivers"
 	UserInfo = "UserInfo"
+
+	UserField       = "user"
+	ActiveField     = "active"
+	SearchField     = "search"
+	ExperienceField = "experience"
+	CitiesField     = "cities"
 )
 
+// Vacancy struct holds info about each job posting
 type Vacancy struct {
 	Position string
 	Company  string
@@ -28,21 +37,43 @@ type Vacancy struct {
 }
 
 // type User struct {
-// 	user       string  `bson:"user"`
+// 	user       string  `bson:UserField`
 // 	active     bool    `bson:"active"`
 // 	search     string  `bson:"search"`
-// 	experience int32   `bson:"experience"`
-// 	cities     []int32 `bson:"cities"`
+// 	experience Int64   `bson:"experience"`
+// 	cities     []Int64 `bson:"cities"`
 // }
 
+// User struct contains info about each user
 type User struct {
 	User       string
 	Active     bool
 	Search     string
-	Experience int32
-	Cities     []int32
+	Experience int64
+	Cities     []int64
 }
 
+var exp = map[int64]string{0: "noExperience", 1: "between1And3"}
+
+func GetUser(c *mongo.Client, user string) (User, error) {
+	query := bson.NewDocument(
+		bson.EC.String(UserField, user),
+	)
+
+	search := c.Database(DBName).Collection(UserInfo).FindOne(context.Background(), query)
+
+	found := User{}
+	err := search.Decode(&found)
+	if err != nil {
+		// if err.Error() == "mongo: no documents in result" {
+		return found, errors.New("no user found")
+
+	} else {
+		return found, nil
+	}
+}
+
+// RetrieveUser walks through all active users and sends them updates
 func RetrieveUser(c *mongo.Client) {
 	cursor, err := c.Database(DBName).Collection(UserInfo).Find(context.Background(), nil)
 	defer cursor.Close(context.Background())
@@ -61,6 +92,48 @@ func RetrieveUser(c *mongo.Client) {
 		}
 		fmt.Println("after decode")
 
+		user := currentUser.User
+		cities := currentUser.Cities
+		jobs := currentUser.Search
+		experiences := exp[currentUser.Experience]
+
+		allJobs := []Vacancy{}
+		ch := make(chan []Vacancy)
+		routines := 0
+
+		// for _, job := range jobs {
+		// 	for _, experience := range experiences {
+		for _, city := range cities {
+			url := "https://api.hh.ru/vacancies?text=" + jobs + "&area=" + strconv.FormatInt(city, 10) + "&experience=" + experiences + "&per_page=100&specialization=1"
+			fmt.Println(url)
+			go ExampleScrape(url, ch)
+			routines++
+		}
+		// 	}
+		// }
+
+		for i := 0; i < routines; i++ {
+			fmt.Println("appending now")
+			allJobs = append(allJobs, <-ch...)
+			// fmt.Println(len(allJobs))
+		}
+		close(ch)
+
+		fmt.Println("moving on")
+
+		for _, position := range allJobs {
+			// fmt.Println(position)
+			if ExistsVacancy(c, position, user) {
+				continue
+			} else {
+				fmt.Println("******\nFound new job posting!\n******")
+				fmt.Println(position)
+
+				InsertVacancy(c, position, user)
+			}
+
+		}
+
 		fmt.Println(currentUser)
 	}
 }
@@ -70,100 +143,113 @@ func (v Vacancy) String() string {
 }
 
 // MarshalBSON does custom marshalling
-func (v Vacancy) MarshalBSON() (*bson.Document, error) {
-	el := bson.NewDocument(
-		bson.EC.String("position", v.Position),
-		bson.EC.String("company", v.Company),
-		bson.EC.String("link", v.Link),
-		bson.EC.String("city", v.City),
-		bson.EC.String("details", v.Details),
-	)
+// func (v Vacancy) MarshalBSON() (*bson.Document, error) {
+// 	el := bson.NewDocument(
+// 		bson.EC.String("position", v.Position),
+// 		bson.EC.String("company", v.Company),
+// 		bson.EC.String("link", v.Link),
+// 		bson.EC.String("city", v.City),
+// 		bson.EC.String("details", v.Details),
+// 	)
 
-	if el == nil {
-		return nil, errors.New("Could not create bson element")
-	}
-	return el, nil
-}
+// 	if el == nil {
+// 		return nil, errors.New("Could not create bson element")
+// 	}
+// 	return el, nil
+// }
 
+// InitUser initializes user after he joined
 func InitUser(c *mongo.Client, user string) bool {
 	query := bson.NewDocument(
-		bson.EC.String("user", user),
-		// bson.EC.Boolean("active", true),
+		bson.EC.String(UserField, user),
 	)
 
-	search, err := c.Database(DBName).Collection(UserInfo).Find(context.Background(), query)
-	defer search.Close(context.Background())
+	search := c.Database(DBName).Collection(UserInfo).FindOne(context.Background(), query)
+
+	found := User{}
+	err := search.Decode(&found)
+	// fmt.Println(found)
 	if err != nil {
+		if err.Error() == "mongo: no documents in result" {
+			query = bson.NewDocument(
+				bson.EC.String(UserField, user),
+				bson.EC.Boolean(ActiveField, false),
+				bson.EC.String(SearchField, ""),
+				bson.EC.Int64(ExperienceField, 0),
+				bson.EC.ArrayFromElements(CitiesField, bson.VC.Int64(1)),
+			)
+
+			_, errInsert := c.Database(DBName).Collection(UserInfo).InsertOne(context.Background(), query)
+			if errInsert != nil {
+				log.Fatal(errInsert)
+			}
+			return true
+		}
+
 		log.Fatal(err)
 	}
 
-	if search.Next(nil) {
-		return false
-	}
+	return false
 
-	query = bson.NewDocument(
-		bson.EC.String("user", user),
-		bson.EC.Boolean("active", false),
-		bson.EC.String("search", ""),
-		bson.EC.Int32("experience", 0),
-		bson.EC.ArrayFromElements("cities", bson.VC.Int32(1)),
-	)
-
-	_, errInsert := c.Database(DBName).Collection(UserInfo).InsertOne(context.Background(), query)
-	if errInsert != nil {
-		log.Fatal(errInsert)
-	}
-	return true
 }
 
-func SetString(c *mongo.Client, user string, field string, value string) {
-	query := bson.NewDocument(
-		bson.EC.SubDocumentFromElements(
-			"$set",
-			bson.EC.String(field, value),
-		),
-	)
+// func ExistsUser(c *mongo.Client, user string) bool {
+// 	query := bson.NewDocument(
+// 		bson.EC.String(UserField, user),
+// 		// bson.EC.Boolean("active", true),
+// 	)
 
-	_, err := c.Database(DBName).Collection(UserInfo).UpdateOne(
-		context.Background(),
-		bson.NewDocument(
-			bson.EC.String("user", user),
-		),
-		query,
-	)
+// }
 
-	if err != nil {
-		log.Fatal(err)
-	}
-}
+// // SetString
+// func SetString(c *mongo.Client, user string, field string, value string) {
+// 	query := bson.NewDocument(
+// 		bson.EC.SubDocumentFromElements(
+// 			"$set",
+// 			bson.EC.String(field, value),
+// 		),
+// 	)
 
-func SetBool(c *mongo.Client, user string, field string, value bool) {
-	query := bson.NewDocument(
-		bson.EC.SubDocumentFromElements(
-			"$set",
-			bson.EC.Boolean(field, value),
-		),
-	)
+// 	_, err := c.Database(DBName).Collection(UserInfo).UpdateOne(
+// 		context.Background(),
+// 		bson.NewDocument(
+// 			bson.EC.String(UserField, user),
+// 		),
+// 		query,
+// 	)
 
-	_, err := c.Database(DBName).Collection(UserInfo).UpdateOne(
-		context.Background(),
-		bson.NewDocument(
-			bson.EC.String("user", user),
-		),
-		query,
-	)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// }
 
-	if err != nil {
-		log.Fatal(err)
-	}
-}
+// func SetBool(c *mongo.Client, user string, field string, value bool) {
+// 	query := bson.NewDocument(
+// 		bson.EC.SubDocumentFromElements(
+// 			"$set",
+// 			bson.EC.Boolean(field, value),
+// 		),
+// 	)
+
+// 	_, err := c.Database(DBName).Collection(UserInfo).UpdateOne(
+// 		context.Background(),
+// 		bson.NewDocument(
+// 			bson.EC.String(UserField, user),
+// 		),
+// 		query,
+// 	)
+
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// }
 
 func SetElement(c *mongo.Client, user string, field string, value interface{}) {
 	query := bson.NewDocument()
 
 	switch t := value.(type) {
-	case int32:
-		element := bson.EC.Int32(field, t)
+	case int64:
+		element := bson.EC.Int64(field, t)
 		query = bson.NewDocument(
 			bson.EC.SubDocumentFromElements(
 				"$set",
@@ -193,7 +279,7 @@ func SetElement(c *mongo.Client, user string, field string, value interface{}) {
 	_, err := c.Database(DBName).Collection(UserInfo).UpdateOne(
 		context.Background(),
 		bson.NewDocument(
-			bson.EC.String("user", user),
+			bson.EC.String(UserField, user),
 		),
 		query,
 	)
@@ -203,11 +289,11 @@ func SetElement(c *mongo.Client, user string, field string, value interface{}) {
 	}
 }
 
-func SetArray(c *mongo.Client, user string, field string, value []int32) {
+func SetArray(c *mongo.Client, user string, field string, value []int64) {
 
 	bsonArray := bson.NewArray()
 	for _, i := range value {
-		bsonArray.Append(bson.VC.Int32(int32(i)))
+		bsonArray.Append(bson.VC.Int64(int64(i)))
 	}
 
 	// query := bson.NewDocument(
@@ -232,7 +318,7 @@ func SetArray(c *mongo.Client, user string, field string, value []int32) {
 	_, err := c.Database(DBName).Collection(UserInfo).UpdateOne(
 		context.Background(),
 		bson.NewDocument(
-			bson.EC.String("user", user),
+			bson.EC.String(UserField, user),
 		),
 		unsetArray,
 	)
@@ -257,7 +343,7 @@ func SetArray(c *mongo.Client, user string, field string, value []int32) {
 	_, err = c.Database(DBName).Collection(UserInfo).UpdateOne(
 		context.Background(),
 		bson.NewDocument(
-			bson.EC.String("user", user),
+			bson.EC.String(UserField, user),
 		),
 		query,
 	)
